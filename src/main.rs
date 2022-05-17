@@ -1,14 +1,23 @@
+// What is this about for me? It is about computers and UI.
+// What is line buffering
+
 use std::io::{stdin, stdout, Stdout, Write};
 use termion::{
-    clear, cursor,
+    clear,
     cursor::Goto,
+    cursor::{self, DetectCursorPos},
     event::{Event, Key},
     input::TermRead,
     raw::{IntoRawMode, RawTerminal},
-    style,
 };
 
-#[derive(Copy, Clone)]
+type AppError = Box<dyn std::error::Error>;
+
+fn main() -> Result<(), AppError> {
+    Game::init()?.run()
+}
+
+#[derive(Copy, Clone, PartialEq)]
 enum Player {
     X,
     O,
@@ -22,50 +31,151 @@ impl std::fmt::Display for Player {
             Player::X => "⨉",
             Player::Empty => " ",
         };
-        write!(f, "{}", character)
-    }
-}
-
-impl Default for Player {
-    fn default() -> Self {
-        Player::Empty
+        f.write_str(character)
     }
 }
 
 struct Game {
     turn: Player,
-    cursor: usize,
     board: [Player; 9],
-    x: u16,
-    y: u16,
+    stdout: RawTerminal<Stdout>,
 }
+
+const START_X: u16 = 2;
+const START_Y: u16 = 5;
+
 impl Game {
-    fn place_turn(&mut self) {
-        self.board[self.cursor] = self.turn;
-        self.toggle_player();
-    }
-    fn incr_x(&mut self) {
-        self.x = self.x + 1;
-    }
-    fn decr_x(&mut self) {
-        self.x = self.x - 1;
-    }
-    fn incr_y(&mut self) {
-        self.y = self.y + 1;
-    }
-    fn decr_y(&mut self) {
-        self.y = self.y - 1;
+    fn init() -> Result<Self, AppError> {
+        let mut stdout = stdout().into_raw_mode()?;
+        write!(stdout, "{}", clear::All)?;
+        stdout.write(cursor::BlinkingUnderline.to_string().as_bytes())?;
+
+        Ok(Self {
+            stdout,
+            turn: Player::X,
+            board: [Player::Empty; 9],
+        })
     }
 
-    fn toggle_player(&mut self) {
-        match self.turn {
-            Player::X => self.turn = Player::O,
-            Player::O => self.turn = Player::X,
-            Player::Empty => {}
+    fn run(&mut self) -> Result<(), AppError> {
+        self.board[1] = Player::X;
+        self.render()?;
+
+        // numeric wrapping on iteration would be nice... .next() instead of increment and decrement
+
+        while let Some(Ok(Event::Key(key))) = stdin().events().next() {
+            let mut board_index = self.cursor_to_index()?;
+            // Placing and skipping could be separate?
+            // placing a turn should progress to the next empty spot automatically
+            // the cursor could blink with the character that will be placed "under" it? and remove turn indicator
+            // left side padding by one character
+            match key {
+                Key::Right => {
+                    loop {
+                        if board_index < self.board.len() - 1 {
+                            let next_index = board_index + 1;
+                            if self.board[next_index] == Player::Empty {
+                                let (x, y) = Self::index_to_cursor(next_index)?;
+                                write!(self.stdout, "{}", termion::cursor::Goto(x, y))?;
+                                break;
+                            } else {
+                                board_index = board_index + 1;
+                            }
+                        } else {
+                            let (x, y) = Self::index_to_cursor(0)?;
+                            write!(self.stdout, "{}", termion::cursor::Goto(x, y))?;
+                            break;
+                        }
+                    }
+                }
+                Key::Left if board_index > 0 => {
+                    let (x, y) = Self::index_to_cursor(board_index - 1)?;
+                    write!(self.stdout, "{}", termion::cursor::Goto(x, y))?;
+                }
+                // overflow
+                Key::Left => {
+                    let (x, y) = Self::index_to_cursor(self.board.len() - 1)?;
+                    write!(self.stdout, "{}", termion::cursor::Goto(x, y))?;
+                }
+                Key::Char('\n') => {
+                    // Map cursor position to board position
+                    let board_index = self.cursor_to_index()?;
+                    if self.board[board_index] == Player::Empty {
+                        self.board[board_index] = self.turn;
+                        // Write the turn char
+                        write!(self.stdout, "{}", self.turn)?;
+                        // Toggle the player
+                        match self.turn {
+                            Player::X => self.turn = Player::O,
+                            Player::O => self.turn = Player::X,
+                            _ => {}
+                        }
+                        let (x, y) = self.stdout.cursor_pos()?;
+                        write!(
+                            self.stdout,
+                            "{}{}{}",
+                            termion::cursor::Goto(x - 1, y),
+                            self.turn,
+                            termion::cursor::Goto(x - 1, y)
+                        )?;
+                    }
+                }
+                Key::Char('q') => {
+                    break;
+                }
+                _ => {
+                    continue;
+                }
+             }
+            self.stdout.flush()?;
         }
+        Ok(())
     }
-    fn render(&self, stdout: &mut RawTerminal<Stdout>) -> Result<(), Box<dyn std::error::Error>> {
-        let buf = format!(
+
+    fn index_to_cursor(board_index: usize) -> Result<(u16, u16), AppError> {
+        let cursor_position = match board_index {
+            0 => (2, 5),
+            1 => (6, 5),
+            2 => (10, 5),
+            3 => (2, 7),
+            4 => (6, 7),
+            5 => (10, 7),
+            6 => (2, 9),
+            7 => (6, 9),
+            8 => (10, 9),
+            _ => panic!("Invalid index"),
+        };
+        Ok(cursor_position)
+    }
+
+    fn cursor_to_index(&mut self) -> Result<usize, AppError> {
+        let board_index = match self.stdout.cursor_pos()? {
+            (2, 5) => 0,
+            (6, 5) => 1,
+            (10, 5) => 2,
+            (2, 7) => 3,
+            (6, 7) => 4,
+            (10, 7) => 5,
+            (2, 9) => 6,
+            (6, 9) => 7,
+            (10, 9) => 8,
+            _ => panic!("Invalid cursor position"),
+        };
+        Ok(board_index)
+    }
+
+    fn render(&mut self) -> Result<(), AppError> {
+        self.stdout.write(Goto(1, 1).to_string().as_bytes())?;
+        self.render_board()?;
+        self.stdout
+            .write(Goto(START_X, START_Y).to_string().as_bytes())?;
+        self.stdout.flush()?;
+        Ok(())
+    }
+
+    fn render_board(&mut self) -> Result<(), AppError> {
+        // todo: the turn line won't be needed
+        let board = format!(
             "      ╭─╮\r
 Turn: │{}│\r
       ╰─╯\r
@@ -75,6 +185,7 @@ Turn: │{}│\r
  {} │ {} │ {}\r
 ───┼───┼───\r
  {} │ {} │ {}\r
+\r
 ",
             self.turn,
             self.board[0],
@@ -87,88 +198,27 @@ Turn: │{}│\r
             self.board[7],
             self.board[8],
         );
-        stdout.write(buf.as_bytes())?;
-        stdout.flush()?;
+        self.stdout.write(board.as_bytes())?;
         Ok(())
     }
 }
 
-impl Default for Game {
-    fn default() -> Self {
-        Self {
-            turn: Player::X,
-            cursor: 0,
-            board: [
-                Default::default(),
-                Default::default(),
-                Default::default(),
-                Default::default(),
-                Default::default(),
-                Default::default(),
-                Default::default(),
-                Default::default(),
-                Default::default(),
-            ],
-            x: 1,
-            y: 1,
-        }
+// Reset stdout
+impl Drop for Game {
+    fn drop(&mut self) {
+        // write!(
+        //     self.stdout,
+        //     "{}{}{}{}",
+        //     clear::All,
+        //     style::Reset,
+        //     cursor::Goto(1, 1),
+        //     cursor::BlinkingBlock
+        // )
+        // .unwrap();
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut stdin = stdin().events();
-    let mut stdout = stdout().into_raw_mode()?;
-    let mut game = Game::default();
-    game.turn = Player::O;
-
-    stdout.write(clear::All.to_string().as_bytes())?;
-    stdout.flush()?;
-    stdout.write(Goto(1, 1).to_string().as_bytes())?;
-    stdout.flush()?;
-
-    game.render(&mut stdout)?;
-
-    // A map needs to be made between the canvas and the board cursor (0-8)
-    // A true map is not needed if the is a mathmatical (constant) relation between them
-
-    while let Some(Ok(ev)) = stdin.next() {
-        match ev {
-            Event::Key(Key::Down) => {}
-            Event::Key(Key::Up) => {
-                write!(stdout, "{}", termion::cursor::Goto(*x, *y))?;
-            }
-            Event::Key(Key::Right) => {
-                write!(stdout, "{}", termion::cursor::Goto(*x, *y))?;
-            }
-            Event::Key(Key::Left) => {
-                write!(stdout, "{}", termion::cursor::Goto(*x, *y))?;
-            }
-            Event::Key(Key::Char('\n')) => {
-                game.place_turn();
-            }
-            Event::Key(Key::Ctrl('c')) => {
-                write!(stdout, "\r\nctrl-c")?;
-            }
-            Event::Key(Key::Char('q')) => return Ok(()),
-            _ => {
-                continue;
-            }
-        }
-        stdout.flush()?;
-    }
-    // listen for KBD events and look for arrow keys and save the cursor state and re-print on move
-    // on enter key, place the move and re
-    write!(
-        stdout,
-        "{}{}{}",
-        clear::All,
-        style::Reset,
-        cursor::Goto(1, 1)
-    )?;
-    return Ok(());
-}
-
-fn write_position(game: &Game, stdout: &RawTerminal<Stdout>) -> Result<(), std::io::Error> {
-    write!(stdout, "{}", termion::cursor::Goto(game.x, game.y))?;
-    Ok(())
+#[test]
+fn my_thing() {
+    assert!("asdf" == "asdf");
 }
