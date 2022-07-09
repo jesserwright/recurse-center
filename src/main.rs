@@ -1,5 +1,18 @@
-// What is this about for me? It is about computers and UI.
-// What is line buffering
+// The terminal knows the position of the cursor; this can be queried at any time
+// the board state is also known
+// the relationship between these two can be known statically, or mathmatically with an offset
+// the offset is (from starting position):
+// starting at 1,1 (x,y)
+// 
+
+//    │ ⨉ │  
+// ───┼───┼───
+//    │   │  
+// ───┼───┼───
+//    │   │  
+
+// if the game is made well it can offer an API via a library that can be implemented by unique renderers:
+// web, terminal, etc... definately not needed right now though.
 
 use std::io::{stdin, stdout, Stdout, Write};
 use termion::{
@@ -14,9 +27,18 @@ use termion::{
 type AppError = Box<dyn std::error::Error>;
 
 fn main() -> Result<(), AppError> {
+    print!("
+    hi there
+    ");
     Game::init()?.run()
 }
 
+// What would a CPU need to do to calculate the needed things for a tic tac toe game?
+// It would need to iterate positions by checking memory location of input events and translating those
+// to the 'next thing' based on a set of conditionals
+// 
+
+// Why not a Option<Player>?
 #[derive(Copy, Clone, PartialEq)]
 enum Player {
     X,
@@ -41,8 +63,8 @@ struct Game {
     stdout: RawTerminal<Stdout>,
 }
 
-const START_X: u16 = 2;
-const START_Y: u16 = 5;
+const START_X: u16 = 1;
+const START_Y: u16 = 1;
 
 impl Game {
     fn init() -> Result<Self, AppError> {
@@ -63,6 +85,10 @@ impl Game {
 
         // numeric wrapping on iteration would be nice... .next() instead of increment and decrement
 
+        // iterates over stdin, and that is a an input to the process. a process has a stdin, stdout, and stderr.?
+        // threads are a possibility; reading and writing from process memory with separate cores; but the same process.
+        // thread exection is not guarenteed to be in any particular order
+        // out of order is faster because things are unpredictible
         while let Some(Ok(Event::Key(key))) = stdin().events().next() {
             let mut board_index = self.cursor_to_index()?;
             // Placing and skipping could be separate?
@@ -132,38 +158,6 @@ impl Game {
         Ok(())
     }
 
-    fn index_to_cursor(board_index: usize) -> Result<(u16, u16), AppError> {
-        let cursor_position = match board_index {
-            0 => (2, 5),
-            1 => (6, 5),
-            2 => (10, 5),
-            3 => (2, 7),
-            4 => (6, 7),
-            5 => (10, 7),
-            6 => (2, 9),
-            7 => (6, 9),
-            8 => (10, 9),
-            _ => panic!("Invalid index"),
-        };
-        Ok(cursor_position)
-    }
-
-    fn cursor_to_index(&mut self) -> Result<usize, AppError> {
-        let board_index = match self.stdout.cursor_pos()? {
-            (2, 5) => 0,
-            (6, 5) => 1,
-            (10, 5) => 2,
-            (2, 7) => 3,
-            (6, 7) => 4,
-            (10, 7) => 5,
-            (2, 9) => 6,
-            (6, 9) => 7,
-            (10, 9) => 8,
-            _ => panic!("Invalid cursor position"),
-        };
-        Ok(board_index)
-    }
-
     fn render(&mut self) -> Result<(), AppError> {
         self.stdout.write(Goto(1, 1).to_string().as_bytes())?;
         self.render_board()?;
@@ -175,19 +169,20 @@ impl Game {
 
     fn render_board(&mut self) -> Result<(), AppError> {
         // todo: the turn line won't be needed
+        // when printing, the 'printer' will use the carriage return to write a return character
         let board = format!(
-            "      ╭─╮\r
-Turn: │{}│\r
-      ╰─╯\r
-            \r
+//             "       ╭─╮\r
+//  Turn: │{}│\r
+//        ╰─╯\r
+//             \r
+"
  {} │ {} │ {}\r
 ───┼───┼───\r
  {} │ {} │ {}\r
 ───┼───┼───\r
  {} │ {} │ {}\r
-\r
 ",
-            self.turn,
+            // self.turn,
             self.board[0],
             self.board[1],
             self.board[2],
@@ -203,7 +198,8 @@ Turn: │{}│\r
     }
 }
 
-// Reset stdout
+// Reset stdout. Does it matter though? Was the process given a new stdout handle that is automatically disposed?
+// are in/out/err handles associated resources to a process?
 impl Drop for Game {
     fn drop(&mut self) {
         // write!(
